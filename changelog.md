@@ -1,5 +1,22 @@
 # Xorco IP Scanner Changelog
 
+## [v1.0.6] - 2026-03-07
+### Added
+- **Expanded Device Identification**: Implemented custom mDNS (Multicast DNS) and NetBIOS responders to resolve `.local` and legacy hostnames more effectively.
+- **MAC Manufacturer Lookup**: Integrated a vendor OUI database to identify hardware manufacturers (Apple, HP, Sonos, etc.) even when hostnames are missing.
+- **Web Interface Discovery**: Added a feature to fetch `<title>` tags from open web ports (80, 443) to help identify routers, printers, and IoT devices.
+
+### Changed
+- Improved language compatibility for older .NET Framework compilers (replaced C# 6.0 interpolation with `string.Format`).
+- Renamed "Hostname" column to "Hostname / Manufacturer" for richer discovery data.
+- Renamed "Latency" column to "Ping Response (ms)" for better clarity.
+
+## [v1.0.5] - 2026-03-07
+### Changed
+- Performance optimization: Refined multi-threaded scan logic for faster host discovery.
+- UI bug fix: Corrected column alignment on high-DPI displays.
+
+
 ## [v1.0.4] - 2026-03-07
 ### Changed
 - Improved default sorting: scan results are now automatically sorted by IP address.

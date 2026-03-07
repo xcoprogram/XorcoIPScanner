@@ -54,7 +54,7 @@ namespace NetworkScannerApp
 
         private void InitializeComponent()
         {
-            const string versionStr = "v1.0.4";
+            const string versionStr = "v1.0.6";
             this.Text = "Xorco IP Scanner " + versionStr;
             this.Size = new Size(1100, 700);
             this.StartPosition = FormStartPosition.CenterScreen;
@@ -135,8 +135,8 @@ namespace NetworkScannerApp
             
             lstResults.Columns.Add("IP Address", 120);
             lstResults.Columns.Add("MAC Address", 130);
-            lstResults.Columns.Add("Hostname", 200);
-            lstResults.Columns.Add("TTL", 50);
+            lstResults.Columns.Add("Hostname / Manufacturer", 250);
+            lstResults.Columns.Add("Ping Response (ms)", 120);
             lstResults.Columns.Add("Open Ports (80,443,22,3389)", 200);
 
             lstResults.ColumnClick += LstResults_ColumnClick;
@@ -450,21 +450,69 @@ namespace NetworkScannerApp
                 if (isAlive)
                 {
                     var hostname = GetHostname(ip);
+                    var manufacturer = GetManufacturer(macAddress);
                     var openPorts = ScanPorts(ip);
-                    string ttl = reply.Options != null ? reply.Options.Ttl.ToString() : "-";
+                    string latency = reply.Status == IPStatus.Success ? reply.RoundtripTime.ToString() : "-";
+
+                    // If we still have no hostname, try to get info from open web ports
+                    if (string.IsNullOrEmpty(hostname) && (openPorts.Contains("80") || openPorts.Contains("443")))
+                    {
+                        var webName = GetWebTitle(ip, openPorts.Contains("443"));
+                        if (!string.IsNullOrEmpty(webName)) hostname = webName;
+                    }
+
+                    string displayHost = string.IsNullOrEmpty(hostname) ? manufacturer : string.Format("{0} [{1}]", hostname, manufacturer);
+                    if (string.IsNullOrEmpty(displayHost)) displayHost = hostname ?? "";
+                    if (string.IsNullOrEmpty(displayHost)) displayHost = manufacturer ?? "";
 
                     this.Invoke((MethodInvoker)delegate
                     {
                         var item = new ListViewItem(ip.ToString());
                         item.SubItems.Add(macAddress);
-                        item.SubItems.Add(hostname);
-                        item.SubItems.Add(ttl);
+                        item.SubItems.Add(displayHost);
+                        item.SubItems.Add(latency);
                         item.SubItems.Add(openPorts);
                         lstResults.Items.Add(item);
                     });
                 }
             }
             catch { }
+        }
+
+        private string GetManufacturer(string mac)
+        {
+            if (string.IsNullOrEmpty(mac) || mac == "Unknown") return "";
+            string prefix = mac.Replace(":", "").Substring(0, 6).ToUpper();
+            
+            // Common MAC Prefixes (OUI)
+            var vendors = new Dictionary<string, string> {
+                {"000C29", "VMware"}, {"005056", "VMware"}, {"000569", "VMware"},
+                {"001C42", "Parallels"}, {"080027", "VirtualBox"},
+                {"AC8B91", "TP-Link"}, {"50C7BF", "TP-Link"}, {"D807B6", "TP-Link"}, {"98DA44", "TP-Link"},
+                {"000FFF", "Cisco"}, {"000142", "Cisco"}, {"000143", "Cisco"}, {"00000C", "Cisco"},
+                {"0017F2", "Apple"}, {"001C13", "Apple"}, {"001E52", "Apple"}, {"002332", "Apple"}, {"F0B7AA", "Apple"},
+                {"002500", "Apple"}, {"00254B", "Apple"}, {"002608", "Apple"}, {"00264A", "Apple"},
+                {"28CFE9", "Apple"}, {"600308", "Apple"}, {"60C547", "Apple"}, {"701124", "Apple"},
+                {"B817C2", "Apple"}, {"D83062", "Apple"}, {"FC253F", "Apple"}, {"000393", "Apple"},
+                {"001083", "HP"}, {"00110A", "HP"}, {"001708", "HP"}, {"001A4B", "HP"}, {"0060B0", "HP"},
+                {"00089B", "ICP DAS"}, {"000196", "Digital"},
+                {"0009B0", "Onkyo"}, {"000E58", "Sonos"}, {"B8E937", "Sonos"}, {"542A1B", "Sonos"},
+                {"000FB5", "Netgear"}, {"00146C", "Netgear"}, {"00184D", "Netgear"},
+                {"001018", "Broadcom"}, {"001BE9", "Broadcom"},
+                {"001132", "Synology"}, {"001143", "Dell"}, {"001372", "Dell"}, {"001422", "Dell"},
+                {"349F7B", "Canon"}, {"000085", "Canon"}, {"001438", "Canon"},
+                {"00155D", "Microsoft"}, {"001A11", "Google"}, {"3C5AB4", "Google"},
+                {"D8EB97", "Samsung"}, {"E47D63", "Samsung"},
+                {"48D6D5", "Ubiquiti"}, {"7483C2", "Ubiquiti"}, {"802AA8", "Ubiquiti"}, {"FCECDA", "Ubiquiti"},
+                {"B4FB95", "Tesla"}, {"000413", "Snom"}, {"001565", "Yealink"}, {"805E0C", "Yealink"},
+                {"6805CA", "Intel"}, {"0014D1", "TRENDnet"}, {"788C77", "Lexmark"}, {"D8F15B", "Espressif"},
+                {"E0D55E", "ASUSTek"}, {"B04E26", "Amazon"}, {"00BB3A", "Amazon"}, {"FC65DE", "Amazon"},
+                {"00C0CA", "Alfa"}, {"001EC0", "Belkin"}, {"00259C", "Belkin"},
+                {"00405A", "Linksys"}, {"000625", "Linksys"}, {"0014BF", "Linksys"}
+            };
+
+            if (vendors.ContainsKey(prefix)) return vendors[prefix];
+            return "";
         }
 
         private string GetMacAddress(IPAddress ipAddress)
@@ -486,15 +534,155 @@ namespace NetworkScannerApp
 
         private string GetHostname(IPAddress ip)
         {
+            string hostname = null;
+
+            // 1. Try standard DNS reverse lookup
             try
             {
                 var entry = Dns.GetHostEntry(ip);
-                return entry.HostName;
+                if (!string.IsNullOrEmpty(entry.HostName))
+                {
+                    hostname = entry.HostName;
+                    if (hostname == ip.ToString()) hostname = null;
+                }
             }
-            catch
+            catch { }
+
+            // 2. Try NetBIOS Name Service (Port 137)
+            if (string.IsNullOrEmpty(hostname))
             {
-                return "";
+                hostname = GetNetBiosName(ip);
             }
+
+            // 3. Try a simple mDNS query for .local devices (Port 5353)
+            if (string.IsNullOrEmpty(hostname))
+            {
+                hostname = GetMdnsName(ip);
+            }
+
+            return hostname ?? "";
+        }
+
+        private string GetNetBiosName(IPAddress ip)
+        {
+            try
+            {
+                using (var udp = new UdpClient())
+                {
+                    udp.Client.ReceiveTimeout = 400; // Slightly longer for stability
+                    byte[] request = new byte[] {
+                        0x80, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
+                        0x20, 0x43, 0x4b, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 
+                        0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 
+                        0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x00, 0x00, 0x21, 
+                        0x00, 0x01
+                    };
+                    udp.Send(request, request.Length, new IPEndPoint(ip, 137));
+                    var remote = new IPEndPoint(IPAddress.Any, 0);
+                    byte[] response = udp.Receive(ref remote);
+                    
+                    // NetBIOS Node Status Response:
+                    // Skip Header (12) + Question (38) + Answer Header (12) = 62
+                    if (response.Length >= 63)
+                    {
+                        int numberOfNames = response[62];
+                        if (numberOfNames > 0)
+                        {
+                            // Each name record is 18 bytes.
+                            // We take the first one (usually the machine name).
+                            string name = Encoding.ASCII.GetString(response, 63, 15).Trim();
+                            return name;
+                        }
+                    }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        private string GetMdnsName(IPAddress ip)
+        {
+            try
+            {
+                using (var udp = new UdpClient())
+                {
+                    udp.Client.ReceiveTimeout = 400;
+
+                    // Manual mDNS PTR Query Construction
+                    var queryList = new List<byte>();
+                    queryList.AddRange(new byte[] { 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 });
+                    
+                    byte[] ipBytes = ip.GetAddressBytes();
+                    for (int i = 3; i >= 0; i--)
+                    {
+                        string part = ipBytes[i].ToString();
+                        queryList.Add((byte)part.Length);
+                        queryList.AddRange(Encoding.ASCII.GetBytes(part));
+                    }
+
+                    // Append in-addr.arpa
+                    foreach (var s in new string[] { "in-addr", "arpa" })
+                    {
+                        queryList.Add((byte)s.Length);
+                        queryList.AddRange(Encoding.ASCII.GetBytes(s));
+                    }
+                    queryList.Add(0x00); // end of name
+                    queryList.AddRange(new byte[] { 0x00, 0x0C, 0x00, 0x01 }); // Type PTR, Class IN
+
+                    byte[] request = queryList.ToArray();
+                    
+                    // Send to multicast
+                    udp.Send(request, request.Length, new IPEndPoint(IPAddress.Parse("224.0.0.251"), 5353));
+
+                    // Look for response
+                    var remote = new IPEndPoint(IPAddress.Any, 0);
+                    byte[] response = udp.Receive(ref remote);
+                    
+                    // Basic parsing for PTR record
+                    if (response.Length > 20)
+                    {
+                        // Search for the first label following the IP pattern
+                        // This is a simplified extraction
+                        int idx = response.Length - 1;
+                        while(idx > 20 && response[idx] != 0x05) idx--; // look for .local (0x05 "local")
+                        if (idx > 10)
+                        {
+                            int end = idx + 6;
+                            int start = idx;
+                            while(start > 0 && response[start-1] >= 32 && response[start-1] <= 126) start--;
+                            string name = Encoding.ASCII.GetString(response, start, end - start);
+                            if (name.Contains(".local")) return name;
+                        }
+                    }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        private string GetWebTitle(IPAddress ip, bool https)
+        {
+            try
+            {
+                string url = string.Format("{0}://{1}", https ? "https" : "http", ip);
+                var request = (HttpWebRequest)WebRequest.Create(url);
+                request.Timeout = 1000;
+                request.AllowAutoRedirect = true;
+                
+                using (var response = (HttpWebResponse)request.GetResponse())
+                using (var reader = new StreamReader(response.GetResponseStream()))
+                {
+                    string html = reader.ReadToEnd();
+                    int start = html.IndexOf("<title>", StringComparison.OrdinalIgnoreCase);
+                    int end = html.IndexOf("</title>", StringComparison.OrdinalIgnoreCase);
+                    if (start != -1 && end != -1)
+                    {
+                        return html.Substring(start + 7, end - start - 7).Trim();
+                    }
+                }
+            }
+            catch { }
+            return null;
         }
 
         private string ScanPorts(IPAddress ip)
@@ -533,7 +721,7 @@ namespace NetworkScannerApp
                 if (sfd.ShowDialog() == DialogResult.OK)
                 {
                     var sb = new StringBuilder();
-                    sb.AppendLine("IP Address,MAC Address,Hostname,TTL,Open Ports");
+                    sb.AppendLine("IP Address,MAC Address,Hostname,Latency (ms),Open Ports");
                     foreach (ListViewItem item in lstResults.Items)
                     {
                         var line = string.Format("\"{0}\",\"{1}\",\"{2}\",\"{3}\",\"{4}\"",
@@ -680,7 +868,7 @@ namespace NetworkScannerApp
                     returnVal = String.Compare(itemX, itemY);
                 }
             }
-            // Parse TTL sorting (Column 3)
+            // Parse Latency sorting (Column 3)
             else if (col == 3)
             {
                 int vx, vy;
