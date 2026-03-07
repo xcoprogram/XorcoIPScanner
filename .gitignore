@@ -1,0 +1,15 @@
+# Build artifacts
+*.exe
+*.pdb
+*.obj
+*.log
+*.txt
+
+# Visual Studio / IDE
+.vs/
+*.user
+*.suo
+*.sln
+*.csproj
+bin/
+obj/
