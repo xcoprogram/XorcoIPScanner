@@ -42,19 +42,42 @@ namespace NetworkScannerApp
         [DllImport("iphlpapi.dll", ExactSpelling = true)]
         public static extern int SendARP(int DestIP, int SrcIP, byte[] pMacAddr, ref uint PhyAddrLen);
 
+        private System.Windows.Forms.Timer interfaceTimer;
+        private string currentInterfacesFingerprint = "";
+        private CheckBox chkAutoUpdate;
+
         public NetworkScannerForm()
         {
             InitializeComponent();
             PopulateInterfaces();
-            NetworkChange.NetworkAddressChanged += (s, e) => {
-                if (!this.IsDisposed)
-                    this.Invoke((MethodInvoker)PopulateInterfaces);
+            
+            // Listen for network changes
+            NetworkChange.NetworkAddressChanged += (s, e) => NetworkChangedHandler();
+            NetworkChange.NetworkAvailabilityChanged += (s, e) => NetworkChangedHandler();
+
+            // Heartbeat timer for interfaces that don't trigger events (some VPNs)
+            interfaceTimer = new System.Windows.Forms.Timer { Interval = 5000 };
+            interfaceTimer.Tick += (s, e) => {
+                if (chkAutoUpdate != null && chkAutoUpdate.Checked)
+                    PopulateInterfaces();
             };
+            interfaceTimer.Start();
+        }
+
+        private void NetworkChangedHandler()
+        {
+            if (this.IsDisposed || chkAutoUpdate == null || !chkAutoUpdate.Checked) return;
+            if (this.InvokeRequired)
+            {
+                this.BeginInvoke((Action)NetworkChangedHandler);
+                return;
+            }
+            PopulateInterfaces();
         }
 
         private void InitializeComponent()
         {
-            const string versionStr = "v1.0.6";
+            const string versionStr = "v1.0.9";
             this.Text = "Xorco IP Scanner " + versionStr;
             this.Size = new Size(1100, 700);
             this.StartPosition = FormStartPosition.CenterScreen;
@@ -110,6 +133,8 @@ namespace NetworkScannerApp
             btnExportPdf = new Button { Text = "Export PDF", Top = 70, Left = 320, Width = 90, Height = 25 };
             btnExportPdf.Click += (s, e) => ExportToPdf();
 
+            chkAutoUpdate = new CheckBox { Text = "Auto Update Interface List", Top = 180, Left = 10, Width = 200, Checked = true };
+
             rightPanel.Controls.Add(lblStartIp);
             rightPanel.Controls.Add(txtStartIp);
             rightPanel.Controls.Add(lblEndIp);
@@ -121,6 +146,7 @@ namespace NetworkScannerApp
             rightPanel.Controls.Add(lblVersionText);
             rightPanel.Controls.Add(btnExportCsv);
             rightPanel.Controls.Add(btnExportPdf);
+            rightPanel.Controls.Add(chkAutoUpdate);
 
             topContainer.Controls.Add(mainSplitter);
 
@@ -236,11 +262,6 @@ namespace NetworkScannerApp
 
         private void PopulateInterfaces()
         {
-            string selectedIp = null;
-            if (lstInterfaces.SelectedItems.Count > 0)
-                selectedIp = lstInterfaces.SelectedItems[0].SubItems[1].Text;
-
-            lstInterfaces.Items.Clear();
             var interfaces = NetworkInterface.GetAllNetworkInterfaces()
                 .Where(ni => ni.OperationalStatus == OperationalStatus.Up && 
                             (ni.NetworkInterfaceType == NetworkInterfaceType.Ethernet || 
@@ -249,6 +270,10 @@ namespace NetworkScannerApp
                              ni.Description.ToLower().Contains("vpn") ||
                              ni.Description.ToLower().Contains("virtual")))
                 .ToList();
+
+            // Build a fingerprint to see if anything actually changed
+            var sb = new StringBuilder();
+            var itemsToAdd = new List<ListViewItem>();
 
             foreach (var ni in interfaces)
             {
@@ -262,10 +287,14 @@ namespace NetworkScannerApp
                         
                         string dnsString = string.Join(", ", dnsServers);
                         string gatewayString = string.Join(", ", gateways);
+                        string ipStr = ip.Address.ToString();
+                        string maskStr = ip.IPv4Mask.ToString();
+
+                        sb.AppendFormat("{0}|{1}|{2}|{3}|{4};", ni.Name, ipStr, maskStr, gatewayString, dnsString);
 
                         var item = new ListViewItem(ni.Name);
-                        item.SubItems.Add(ip.Address.ToString());
-                        item.SubItems.Add(ip.IPv4Mask.ToString());
+                        item.SubItems.Add(ipStr);
+                        item.SubItems.Add(maskStr);
                         item.SubItems.Add(gatewayString);
                         item.SubItems.Add(dnsString);
                         item.Tag = new InterfaceItem 
@@ -276,16 +305,34 @@ namespace NetworkScannerApp
                             Gateway = gatewayString,
                             Dns = dnsString
                         };
-                        lstInterfaces.Items.Add(item);
-                        
-                        if (selectedIp != null && ip.Address.ToString() == selectedIp)
-                            item.Selected = true;
+                        itemsToAdd.Add(item);
                     }
                 }
             }
 
+            string newFingerprint = sb.ToString();
+            if (newFingerprint == currentInterfacesFingerprint) return;
+
+            // Only update if something changed
+            currentInterfacesFingerprint = newFingerprint;
+
+            string selectedIp = null;
+            if (lstInterfaces.SelectedItems.Count > 0)
+                selectedIp = lstInterfaces.SelectedItems[0].SubItems[1].Text;
+
+            lstInterfaces.BeginUpdate();
+            lstInterfaces.Items.Clear();
+            foreach (var item in itemsToAdd)
+            {
+                lstInterfaces.Items.Add(item);
+                if (selectedIp != null && item.SubItems[1].Text == selectedIp)
+                    item.Selected = true;
+            }
+
             if (lstInterfaces.Items.Count > 0 && lstInterfaces.SelectedItems.Count == 0)
                 lstInterfaces.Items[0].Selected = true;
+            
+            lstInterfaces.EndUpdate();
         }
 
         private void LstInterfaces_SelectedIndexChanged(object sender, EventArgs e)

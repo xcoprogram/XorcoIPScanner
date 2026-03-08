@@ -1,5 +1,14 @@
 # Xorco IP Scanner Changelog
 
+## [v1.0.9] - 2026-03-07
+### Added
+- **Auto-Update Toggle**: Added a checkbox to enable or disable real-time network interface list updates, giving users control over background refreshes.
+
+## [v1.0.8] - 2026-03-07
+### Added
+- **Robust Real-time Monitoring**: Added `NetworkAvailabilityChanged` listener and a background heartbeat timer to ensure the network interface list updates reliably when cables are plugged/unplugged or VPNs connect/disconnect.
+- **Flicker-free UI Updates**: Improved `PopulateInterfaces` to only refresh the list when actual changes are detected, preventing UI flicker and preserving user selection.
+
 ## [v1.0.6] - 2026-03-07
 ### Added
 - **Expanded Device Identification**: Implemented custom mDNS (Multicast DNS) and NetBIOS responders to resolve `.local` and legacy hostnames more effectively.
